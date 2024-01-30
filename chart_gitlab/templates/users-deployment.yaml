@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: users-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: users
+  template:
+    metadata:
+      labels:
+        app: users
+    spec:
+      containers:
+        - name: users
+          image: "{{ .Values.users.image.repository }}:latest"
+          command: ["sh", "-c", "uvicorn main:app --reload --host 0.0.0.0"]
+          ports:
+            - containerPort: 8000
+          env:
+            - name: ENV_VARIABLE
+              valueFrom:
+                secretKeyRef:
+                  name: users-secret
+                  key: env_variable
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: users-service
+spec:
+  selector:
+    app: users
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP

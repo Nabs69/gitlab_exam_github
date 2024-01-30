@@ -1,0 +1,37 @@
+gateway:
+  image:
+    repository: "nabs69/k-api-gateway"
+    tag: "latest"
+  command: "sh -c 'uvicorn main:app --reload --host 0.0.0.0'"
+  envFile: "./exam_gitlab/gateway/.env"
+  ports:
+    - targetPort: 8000
+      port: 8001
+  dependsOn:
+    - service: users
+      port: 8000
+    - service: orders
+      port: 8000
+  volumes:
+    - hostPath: "./exam_gitlab/gateway"
+      mountPath: "/exam_gitlab"
+
+users:
+  image:
+    repository: "nabs69/k-users"
+    tag: "latest"
+  command: "sh -c 'uvicorn main:app --reload --host 0.0.0.0'"
+  envFile: "./exam_gitlab/users/.env"
+  volumes:
+    - hostPath: "./exam_gitlab/users"
+      mountPath: "/exam_gitlab"
+
+orders:
+  image:
+    repository: "nabs69/k-orders"
+    tag: "latest"
+  command: "sh -c 'uvicorn main:app --reload --host 0.0.0.0'"
+  envFile: "./exam_gitlab/orders/.env"
+  volumes:
+    - hostPath: "./exam_gitlab/orders"
+      mountPath: "/exam_gitlab"
