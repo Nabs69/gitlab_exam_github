@@ -1,0 +1,272 @@
+variables:
+  # The domain used for the live deploy_prodment
+  KUBE_NAMESPACE_dev: dev
+  KUBE_NAMESPACE_staging: staging
+  KUBE_NAMESPACE_qa: qa
+  KUBE_NAMESPACE_prod: prod
+  IP_DEV: 18.201.118.22
+  IP_QA: 18.201.118.22
+  IP_STAGING: 18.201.118.22
+  IP_PROD: 18.201.118.22
+  NODEPORT_DEV: 30000
+  NODEPORT_QA: 30001
+  NODEPORT_STAGING: 30002
+  NODEPORT_PROD: 30003
+
+image:
+  name: "python:3.11-alpine"
+  entrypoint: ["/bin/sh", "-c"]
+
+stages:
+  - pre_build
+  - build
+  - test
+  - push
+  - deploy
+  - deploy_dev
+  #- test_dev
+  - deploy_qa
+  #- test_qa
+  - deploy_staging
+  #- test_staging
+  - deploy_prod
+  #- test_prod
+
+pre_build:
+  stage: pre_build
+  script:
+    - docker --version
+    - helm version
+
+build:
+  stage: build
+  before_script:
+    - docker info
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+  script:
+    - docker build -t $CI_REGISTRY_IMAGE/k-api-gateway:$CI_PIPELINE_ID gateway
+    - docker push -q $CI_REGISTRY_IMAGE/k-api-gateway:$CI_PIPELINE_ID
+    - docker build -t $CI_REGISTRY_IMAGE/k-users:$CI_PIPELINE_ID users
+    - docker push -q $CI_REGISTRY_IMAGE/k-users:$CI_PIPELINE_ID
+    - docker build -t $CI_REGISTRY_IMAGE/k-orders:$CI_PIPELINE_ID orders
+    - docker push -q $CI_REGISTRY_IMAGE/k-orders:$CI_PIPELINE_ID
+
+
+test_image:
+  stage: test
+  script:
+    - docker compose up --quiet-pull -d --wait
+    - curl -i http://localhost:8001/docs
+    - docker compose down
+
+
+push_to_docker_hub:
+  image: docker:latest
+  stage: push
+  services:
+    - docker:dind
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker login -u $DOCKER_HUB_REGISTRY_USER -p $DOCKERHUB_PASSWORD
+  script:
+    - docker pull -q $CI_REGISTRY_IMAGE/k-api-gateway:$CI_PIPELINE_ID
+    - docker tag $CI_REGISTRY_IMAGE/k-api-gateway:$CI_PIPELINE_ID nabs69/k-api-gateway:latest
+    - docker push -q nabs69/k-api-gateway:latest
+    
+    - docker pull -q $CI_REGISTRY_IMAGE/k-users:$CI_PIPELINE_ID
+    - docker tag $CI_REGISTRY_IMAGE/k-users:$CI_PIPELINE_ID nabs69/k-users:latest
+    - docker push -q nabs69/k-users:latest
+
+    - docker pull -q $CI_REGISTRY_IMAGE/k-orders:$CI_PIPELINE_ID
+    - docker tag $CI_REGISTRY_IMAGE/k-orders:$CI_PIPELINE_ID nabs69/k-orders:latest
+    - docker push -q nabs69/k-orders:latest
+
+
+
+deploy_dev:
+  # Use the official docker image.
+  image: docker:latest
+  environment:
+    name: dev-$CI_COMMIT_REF_NAME
+    url: http://$IP_DEV:$NODEPORT_DEV
+    on_stop: stop_dev
+  stage: deploy_dev
+  variables:
+    CHARTNAME: skyblue-dev-chart
+    NAMESPACE: dev
+    CLUSTERIP_USERS: 10.43.50.0
+    CLUSTERIP_ORDERS: 10.43.50.1
+
+  services:
+    - docker:dind
+  # Default branch leaves tag empty (= latest tag)
+  # All other branches are tagged with the escaped branch name (commit ref slug)
+  script:
+    - sudo apt-get install coreutils
+    #- rm -Rf .kube
+    #- mkdir .kube
+    #- touch .kube/config
+    #- ls -al
+    #- sudo cat $KUBE_CONFIG > .kube/config
+    #- rm -Rf ~/.kube
+    #- mkdir ~/.kube/
+    #- ls -al
+    #- cat $KUBE_CONFIG > ~/.kube/config
+    - cp ./chart_gitlab/values.yaml values.yml
+    - cat values.yml
+    - sudo helm upgrade --install $CHARTNAME ./chart_gitlab/ --values=./chart_gitlab/values.yaml -n "$NAMESPACE"  --set gateway.service.nodePort="$NODEPORT_DEV" --set users.service.clusterIP="$CLUSTERIP_USERS" --set orders.service.clusterIP="$CLUSTERIP_ORDERS"
+
+#test_dev:
+#  stage: test_dev
+#  script:
+#   - sleep 60
+#   - curl $IP_DEV:$NODEPORT_DEV/docs
+
+stop_dev:
+  stage: deploy_dev
+  variables:
+    NAMESPACE: dev
+  when: manual
+  # Don't stop the "review" for master branch or tags,
+  # it is only for branches (so PRs (most of the time))
+  environment:
+    name: dev-$CI_COMMIT_REF_NAME
+    action: stop
+  script:
+    - sudo helm uninstall ./chart_gitlab/ -n $NAMESPACE  
+
+deploy_qa:
+  # Use the official docker image.
+  image: docker:latest
+  environment:
+    name: qa-$CI_COMMIT_REF_NAME
+    url: http://$IP_QA:$NODEPORT_QA
+    on_stop: stop_qa
+  stage: deploy_qa
+  variables:
+    CHARTNAME: skyblue-qa-chart
+    NAMESPACE: qa
+    CLUSTERIP_USERS: 10.43.51.2
+    CLUSTERIP_ORDERS: 10.43.51.3
+
+  services:
+    - docker:dind
+  # Default branch leaves tag empty (= latest tag)
+  # All other branches are tagged with the escaped branch name (commit ref slug)
+  script:
+    #- cat $KUBE_CONFIG > k8s_config    
+    - sudo helm upgrade --install $CHARTNAME  ./chart_gitlab/ --values=./chart_gitlab/values.yaml -n "$NAMESPACE"  --set gateway.service.nodePort="$NODEPORT_QA" --set users.service.clusterIP="$CLUSTERIP_USERS" --set orders.service.clusterIP="$CLUSTERIP_ORDERS"
+
+#test_qa:
+#  stage: test_qa
+#  script:
+#    - sleep 60
+#    - curl localhost:$NODEPORT_QA/docs
+
+stop_qa:
+  stage: deploy_qa
+  variables:
+    NAMESPACE: qa
+  when: manual
+  # Don't stop the "review" for master branch or tags,p
+  # it is only for branches (so PRs (most of the time))
+  environment:
+    name: qa-$CI_COMMIT_REF_NAME
+    action: stop
+  script:
+    - sudo helm uninstall ./chart_gitlab/ -n $NAMESPACE  
+
+deploy_staging:
+  # Use the official docker image.
+  image: docker:latest
+  environment:
+    name: staging-$CI_COMMIT_REF_NAME
+    url: http://$IP_STAGING:$NODEPORT_STAGING
+    on_stop: stop_staging
+  stage: deploy_staging
+  variables:
+    CHARTNAME: skyblue-staging-chart
+    NAMESPACE: staging
+    CLUSTERIP_USERS: 10.43.52.0
+    CLUSTERIP_ORDERS: 10.43.52.1
+
+  services:
+    - docker:dind
+  # Default branch leaves tag empty (= latest tag)
+  # All other branches are tagged with the escaped branch name (commit ref slug)
+  script:
+    #- cat $KUBE_CONFIG > k8s_config    
+    - sudo helm upgrade --install $CHARTNAME  ./chart_gitlab/ --values=./chart_gitlab/values.yaml -n "$NAMESPACE"  --set gateway.service.nodePort="$NODEPORT_STAGING" --set users.service.clusterIP="$CLUSTERIP_USERS" --set orders.service.clusterIP="$CLUSTERIP_ORDERS"
+
+#test_staging:
+#  stage: test_staging
+#  script:
+ #   - sleep 60
+ #   - curl localhost:$NODEPORT_STAGING/docs
+
+stop_staging:
+  stage: deploy_staging
+  variables:
+    NAMESPACE: staging
+  when: manual
+  # Don't stop the "review" for master branch or tags,
+  # it is only for branches (so PRs (most of the time))
+  environment:
+    name: staging-$CI_COMMIT_REF_NAME
+    action: stop
+  script:
+    - sudo helm uninstall ./chart_gitlab/ -n $NAMESPACE      
+
+deploy_prod:
+  # Use the official docker image.
+  image: docker:latest
+  environment:
+    name: prod-$CI_COMMIT_REF_NAME
+    url: http://$IP_PROD:$NODEPORT_PROD
+    on_stop: stop_prod
+  stage: deploy_prod
+  only:
+    - main  # Run this stage only for the 'main' branch  
+  when: manual  
+  variables:
+    CHARTNAME: skyblue-prod-chart
+    NAMESPACE: prod
+    CLUSTERIP_USERS: 10.43.53.0
+    CLUSTERIP_ORDERS: 10.43.53.1
+
+  services:
+    - docker:dind
+  # Default branch leaves tag empty (= latest tag)
+  # All other branches are tagged with the escaped branch name (commit ref slug)
+  script:
+    - rm -Rf ~/.kube
+    - mkdir ~/.kube/
+    - ls
+    #- cat $KUBE_CONFIG > ~/.kube/config
+    - kubectl config view --raw > ~/.kube/config
+    #- cat $KUBE_CONFIG > k8s_config    
+    - helm upgrade --install $CHARTNAME  ./chart_gitlab/ --values=./chart_gitlab/values.yaml -n "$NAMESPACE"  --set gateway.service.nodePort="$NODEPORT_PROD" --set users.service.clusterIP="$CLUSTERIP_USERS" --set orders.service.clusterIP="$CLUSTERIP_ORDERS"
+
+#test_prod:
+#  stage: test_prod
+#  only:
+#    - main  # Run this stage only for the 'main' branch  
+#  when: manual  
+#  script:
+#    - sleep 60
+#    - curl localhost:$NODEPORT_PROD/docs
+
+stop_prod:
+  stage: deploy_prod
+  only:
+    - main  # Run this stage only for the 'main' branch  
+  variables:
+    NAMESPACE: prod
+  when: manual
+  # Don't stop the "review" for master branch or tags,
+  # it is only for branches (so PRs (most of the time))
+  environment:
+    name: prod-$CI_COMMIT_REF_NAME
+    action: stop
+  script:
+    - sudo helm uninstall ./chart_gitlab/ -n $NAMESPACE 
